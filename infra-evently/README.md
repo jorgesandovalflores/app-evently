@@ -137,27 +137,27 @@ docker network create network-app-evently
 ### 1) Mysql
 
 ```bash
-docker-compose -f docker-compose.mysql.yml -p app-evently up -d
+docker compose -f docker-compose.mysql.yml -p app-evently up -d
 ```
 
 ### 2) Redis
 
 ```bash
-docker-compose -f docker-compose.redis.yml -p app-evently up -d
+docker compose -f docker-compose.redis.yml -p app-evently up -d
 ```
 
 ### 3) HTTP (API)
 
 ```bash
-docker-compose -f docker-compose.http.yml -p app-evently up -d
-docker-compose -f docker-compose.http.yml -p app-evently logs -f http
+docker compose -f docker-compose.http.yml -p app-evently up -d
+docker compose -f docker-compose.http.yml -p app-evently logs -f http
 ```
 
 ### 4) WEB (Vuejs)
 
 ```bash
-docker-compose -f docker-compose.web.yml -p app-evently up -d
-docker-compose -f docker-compose.web.yml -p app-evently logs -f web
+docker compose -f docker-compose.web.yml -p app-evently up -d
+docker compose -f docker-compose.web.yml -p app-evently logs -f web
 ```
 
 ---
