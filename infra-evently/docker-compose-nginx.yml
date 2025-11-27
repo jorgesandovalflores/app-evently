@@ -13,6 +13,10 @@ services:
         volumes:
             - ./nginx.conf:/etc/nginx/nginx.conf:ro
             - /var/www/letsencrypt:/var/www/letsencrypt:ro
+            - /etc/letsencrypt/live/evently-api.usmp.identity.pe/fullchain.pem:/etc/ssl/certs/fullchain-evently-api.pem:ro
+            - /etc/letsencrypt/live/evently-api.usmp.identity.pe/privkey.pem:/etc/ssl/private/privkey-evently-api.pem:ro
+            - /etc/letsencrypt/live/evently.usmp.identity.pe/fullchain.pem:/etc/ssl/certs/fullchain-evently.pem:ro
+            - /etc/letsencrypt/live/evently.usmp.identity.pe/privkey.pem:/etc/ssl/private/privkey-evently.pem:ro
         networks:
             - internal_network
         mem_limit: 128m
