@@ -160,6 +160,13 @@ docker compose -f docker-compose.web.yml -p app-evently up -d
 docker compose -f docker-compose.web.yml -p app-evently logs -f web
 ```
 
+### 5) NGINX
+
+```bash
+docker compose -f docker-compose-nginx.yml -p app-evently up -d
+docker compose -f docker-compose-nginx.yml -p app-evently logs -f nginx
+```
+
 ---
 
 ## Puertos por servicio (host → container)
