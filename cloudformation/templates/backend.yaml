@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Backend API for app-evently"
+
+Parameters:
+    ProjectName:
+        Type: String
+        Default: app-evently
+    Environment:
+        Type: String
+        Default: dev
+    BackendImage:
+        Type: String
+        Default: http-app-evently
+    BackendTag:
+        Type: String
+        Default: 0.0.1
+    CertificateArn:
+        Type: String
+        Description: ACM Certificate ARN for api.usmp.identity.pe
+
+Resources:
+    BackendALBSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Security group for Backend ALB
+            VpcId:
+                Fn::ImportValue: !Sub ${ProjectName}-${Environment}-vpc-id
+            SecurityGroupIngress:
+                - IpProtocol: tcp
+                  FromPort: 80
+                  ToPort: 80
+                  CidrIp: 0.0.0.0/0
+                - IpProtocol: tcp
+                  FromPort: 443
+                  ToPort: 443
+                  CidrIp: 0.0.0.0/0
+            SecurityGroupEgress:
+                - IpProtocol: tcp
+                  FromPort: 3001
+                  ToPort: 3001
+                  CidrIp: 10.0.0.0/16
+
+    BackendALBToBackendIngress:
+        Type: AWS::EC2::SecurityGroupIngress
+        Properties:
+            Description: Allow ALB to access backend
+            GroupId:
+                Fn::ImportValue: !Sub ${ProjectName}-${Environment}-backend-sg-id
+            IpProtocol: tcp
+            FromPort: 3001
+            ToPort: 3001
+            SourceSecurityGroupId: !Ref BackendALBSecurityGroup
+
+    BackendALB:
+        Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+        DependsOn: BackendALBSecurityGroup
+        Properties:
+            Name: !Sub ${ProjectName}-${Environment}-backend-alb
+            Scheme: internet-facing
+            Type: application
+            Subnets:
+                - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-public-subnet-1
+                - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-public-subnet-2
+            SecurityGroups:
+                - !Ref BackendALBSecurityGroup
+
+    BackendTargetGroup:
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        Properties:
+            Name: !Sub ${ProjectName}-${Environment}-backend-tg
+            Port: 3001
+            Protocol: HTTP
+            VpcId:
+                Fn::ImportValue: !Sub ${ProjectName}-${Environment}-vpc-id
+            TargetType: ip
+            HealthCheckPath: /health
+            HealthCheckProtocol: HTTP
+            HealthCheckPort: traffic-port
+            HealthCheckIntervalSeconds: 30
+            HealthCheckTimeoutSeconds: 5
+            HealthyThresholdCount: 2
+            UnhealthyThresholdCount: 2
+            Matcher:
+                HttpCode: 200
+
+    # HTTP → HTTPS redirection
+    BackendHTTPListener:
+        Type: AWS::ElasticLoadBalancingV2::Listener
+        Properties:
+            LoadBalancerArn: !Ref BackendALB
+            Port: 80
+            Protocol: HTTP
+            DefaultActions:
+                - Type: redirect
+                  RedirectConfig:
+                      Protocol: HTTPS
+                      Port: "443"
+                      StatusCode: HTTP_301
+
+    # HTTPS 443 listener with certificate
+    BackendHTTPSListener:
+        Type: AWS::ElasticLoadBalancingV2::Listener
+        Properties:
+            LoadBalancerArn: !Ref BackendALB
+            Port: 443
+            Protocol: HTTPS
+            Certificates:
+                - CertificateArn: !Ref CertificateArn
+            DefaultActions:
+                - Type: forward
+                  TargetGroupArn: !Ref BackendTargetGroup
+
+    ECSExecutionRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          Service: ecs-tasks.amazonaws.com
+                      Action: sts:AssumeRole
+            ManagedPolicyArns:
+                - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+            Policies:
+                - PolicyName: ECRAccess
+                  PolicyDocument:
+                      Statement:
+                          - Effect: Allow
+                            Action:
+                                - ecr:GetAuthorizationToken
+                                - ecr:BatchCheckLayerAvailability
+                                - ecr:GetDownloadUrlForLayer
+                                - ecr:BatchGetImage
+                                - logs:CreateLogStream
+                                - logs:PutLogEvents
+                            Resource: "*"
+
+    ECSTaskRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          Service: ecs-tasks.amazonaws.com
+                      Action: sts:AssumeRole
+            Policies:
+                - PolicyName: ECSAccess
+                  PolicyDocument:
+                      Statement:
+                          - Effect: Allow
+                            Action:
+                                - ecs:DescribeClusters
+                            Resource: "*"
+
+    BackendTaskDefinition:
+        Type: AWS::ECS::TaskDefinition
+        Properties:
+            Family: !Sub ${ProjectName}-${Environment}-backend
+            NetworkMode: awsvpc
+            RequiresCompatibilities:
+                - FARGATE
+            Cpu: 512
+            Memory: 1024
+            ExecutionRoleArn: !Ref ECSExecutionRole
+            TaskRoleArn: !Ref ECSTaskRole
+            ContainerDefinitions:
+                - Name: backend
+                  Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${BackendImage}:${BackendTag}
+                  Essential: true
+                  PortMappings:
+                      - ContainerPort: 3001
+                  Environment:
+                      - Name: NODE_ENV
+                        Value: production
+                      - Name: APP_PORT
+                        Value: "3001"
+                      - Name: GLOBAL_PREFIX
+                        Value: "/api"
+                      - Name: DB_HOST
+                        Value: !Sub mysql.${ProjectName}.local
+                      - Name: DB_PORT
+                        Value: "3306"
+                      - Name: DB_USER
+                        Value: root
+                      - Name: DB_PASS
+                        Value: root
+                      - Name: DB_NAME
+                        Value: db_app_evently
+                      - Name: DB_POOL
+                        Value: "5"
+                      - Name: DB_LOGGING
+                        Value: "true"
+                      - Name: DB_SYNCHRONIZE
+                        Value: "false"
+                      - Name: REDIS_HOST
+                        Value: !Sub redis.${ProjectName}.local
+                      - Name: REDIS_PORT
+                        Value: "6379"
+                      - Name: REDIS_DB
+                        Value: "0"
+                      - Name: REDIS_PASSWORD
+                        Value: ""
+                      - Name: JWT_ACCESS_SECRET
+                        Value: "!Evently@access"
+                      - Name: JWT_ACCESS_TTL
+                        Value: "12h"
+                      - Name: JWT_REFRESH_SECRET
+                        Value: "!Evently@refresh"
+                      - Name: JWT_REFRESH_TTL
+                        Value: "7d"
+                  LogConfiguration:
+                      LogDriver: awslogs
+                      Options:
+                          awslogs-group: !Ref CloudWatchLogGroup
+                          awslogs-region: !Ref AWS::Region
+                          awslogs-stream-prefix: backend
+
+    BackendService:
+        Type: AWS::ECS::Service
+        DependsOn:
+            - BackendHTTPSListener
+        Properties:
+            ServiceName: backend
+            Cluster:
+                Fn::ImportValue: !Sub ${ProjectName}-${Environment}-cluster-name
+            TaskDefinition: !Ref BackendTaskDefinition
+            DesiredCount: 2
+            LaunchType: FARGATE
+            NetworkConfiguration:
+                AwsvpcConfiguration:
+                    AssignPublicIp: DISABLED
+                    Subnets:
+                        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-private-subnet-1
+                        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-private-subnet-2
+                    SecurityGroups:
+                        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-backend-sg-id
+            LoadBalancers:
+                - ContainerName: backend
+                  ContainerPort: 3001
+                  TargetGroupArn: !Ref BackendTargetGroup
+            HealthCheckGracePeriodSeconds: 120
+
+    CloudWatchLogGroup:
+        Type: AWS::Logs::LogGroup
+        Properties:
+            LogGroupName: !Sub /ecs/${ProjectName}-${Environment}-backend
+            RetentionInDays: 30
+
+Outputs:
+    BackendURL:
+        Description: Backend API URL
+        Value: !GetAtt BackendALB.DNSName
+        Export:
+            Name: !Sub ${ProjectName}-${Environment}-backend-url
+
+    BackendALBDNS:
+        Description: Backend ALB DNS Name
+        Value: !GetAtt BackendALB.DNSName
+        Export:
+            Name: !Sub ${ProjectName}-${Environment}-backend-alb-dns
+
+    BackendALBSecurityGroupId:
+        Description: Backend ALB Security Group ID
+        Value: !Ref BackendALBSecurityGroup
+        Export:
+            Name: !Sub ${ProjectName}-${Environment}-backend-alb-sg-id

@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Redis cache for app-evently"
+
+Parameters:
+    ProjectName:
+        Type: String
+        Default: app-evently
+    Environment:
+        Type: String
+        Default: dev
+
+Resources:
+    ECSExecutionRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          Service: ecs-tasks.amazonaws.com
+                      Action: sts:AssumeRole
+            ManagedPolicyArns:
+                - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+            Policies:
+                - PolicyName: ECRAccess
+                  PolicyDocument:
+                      Statement:
+                          - Effect: Allow
+                            Action:
+                                - ecr:GetAuthorizationToken
+                                - ecr:BatchCheckLayerAvailability
+                                - ecr:GetDownloadUrlForLayer
+                                - ecr:BatchGetImage
+                                - logs:CreateLogStream
+                                - logs:PutLogEvents
+                            Resource: "*"
+
+    RedisTaskDefinition:
+        Type: AWS::ECS::TaskDefinition
+        Properties:
+            Family: !Sub ${ProjectName}-${Environment}-redis
+            NetworkMode: awsvpc
+            RequiresCompatibilities:
+                - FARGATE
+            Cpu: 256
+            Memory: 512
+            ExecutionRoleArn: !Ref ECSExecutionRole
+            ContainerDefinitions:
+                - Name: redis
+                  Image: public.ecr.aws/docker/library/redis:7-alpine
+                  Essential: true
+                  PortMappings:
+                      - ContainerPort: 6379
+                  Command:
+                      - redis-server
+                      - --appendonly
+                      - "yes"
+                  LogConfiguration:
+                      LogDriver: awslogs
+                      Options:
+                          awslogs-group: !Ref CloudWatchLogGroup
+                          awslogs-region: !Ref AWS::Region
+                          awslogs-stream-prefix: redis
+
+    RedisServiceDiscovery:
+        Type: AWS::ServiceDiscovery::Service
+        Properties:
+            Name: redis
+            DnsConfig:
+                NamespaceId:
+                    Fn::ImportValue: !Sub ${ProjectName}-${Environment}-namespace-id
+                DnsRecords:
+                    - Type: A
+                      TTL: 60
+            HealthCheckCustomConfig:
+                FailureThreshold: 1
+
+    RedisService:
+        Type: AWS::ECS::Service
+        Properties:
+            ServiceName: redis
+            Cluster:
+                Fn::ImportValue: !Sub ${ProjectName}-${Environment}-cluster-name
+            TaskDefinition: !Ref RedisTaskDefinition
+            DesiredCount: 1
+            LaunchType: FARGATE
+            NetworkConfiguration:
+                AwsvpcConfiguration:
+                    AssignPublicIp: DISABLED
+                    Subnets:
+                        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-private-subnet-1
+                        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-private-subnet-2
+                    SecurityGroups:
+                        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-cache-sg-id
+            ServiceRegistries:
+                - RegistryArn: !GetAtt RedisServiceDiscovery.Arn
+
+    CloudWatchLogGroup:
+        Type: AWS::Logs::LogGroup
+        Properties:
+            LogGroupName: !Sub /ecs/${ProjectName}-${Environment}-redis
+            RetentionInDays: 30
+
+Outputs:
+    RedisHost:
+        Description: Redis Hostname
+        Value: !Sub redis.${ProjectName}.local
+        Export:
+            Name: !Sub ${ProjectName}-${Environment}-redis-host
